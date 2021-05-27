@@ -1,22 +1,19 @@
 /** Copyright 2021 INRIA, Université de Rennes 1 and ENS Rennes
-*
-*   Licensed under the Apache License, Version 2.0 (the "License");
-*   you may not use this file except in compliance with the License.
-*   You may obtain a copy of the License at
-*       http://www.apache.org/licenses/LICENSE-2.0
-*   Unless required by applicable law or agreed to in writing, software
-*   distributed under the License is distributed on an "AS IS" BASIS,
-*   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-*   See the License for the specific language governing permissions and
-*   limitations under the License.
-*/
+ *
+ *   Licensed under the Apache License, Version 2.0 (the "License");
+ *   you may not use this file except in compliance with the License.
+ *   You may obtain a copy of the License at
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *   Unless required by applicable law or agreed to in writing, software
+ *   distributed under the License is distributed on an "AS IS" BASIS,
+ *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *   See the License for the specific language governing permissions and
+ *   limitations under the License.
+ */
 
-
-
+#include "core.h"
 #include "ac_int.h"
 #include "cacheMemory.h"
-#include "core.h"
-
 
 void fetch(const ac_int<32, false> pc, struct FtoDC& ftoDC, const ac_int<32, false> instruction)
 {
@@ -127,13 +124,13 @@ void decode(const struct FtoDC ftoDC, struct DCtoEx& dctoEx, const ac_int<32, tr
       dctoEx.useRd  = 1;
       break;
     case RISCV_BR:
-
-      dctoEx.lhs    = valueReg1;
-      dctoEx.rhs    = valueReg2;
-      dctoEx.useRs1 = 1;
-      dctoEx.useRs2 = 1;
-      dctoEx.useRs3 = 0;
-      dctoEx.useRd  = 0;
+      dctoEx.nextPCDC = ftoDC.pc + imm13_signed;
+      dctoEx.lhs      = valueReg1;
+      dctoEx.rhs      = valueReg2;
+      dctoEx.useRs1   = 1;
+      dctoEx.useRs2   = 1;
+      dctoEx.useRs3   = 0;
+      dctoEx.useRd    = 0;
 
       break;
     case RISCV_LD:
@@ -210,6 +207,7 @@ void execute(const struct DCtoEx dctoEx, struct ExtoMem& extoMem)
   extoMem.funct3            = dctoEx.funct3;
   extoMem.we                = dctoEx.we;
   extoMem.isBranch          = 0;
+  extoMem.predBranch        = dctoEx.predBranch;
   extoMem.useRd             = dctoEx.useRd;
   extoMem.isLongInstruction = 0;
   extoMem.instruction       = dctoEx.instruction;
@@ -248,8 +246,6 @@ void execute(const struct DCtoEx dctoEx, struct ExtoMem& extoMem)
       extoMem.result = dctoEx.pc + 4;
       break;
     case RISCV_BR:
-      extoMem.nextPC = extoMem.pc + imm13_signed;
-
       switch (dctoEx.funct3) {
         case RISCV_BR_BEQ:
           extoMem.isBranch = (dctoEx.lhs == dctoEx.rhs);
@@ -270,6 +266,7 @@ void execute(const struct DCtoEx dctoEx, struct ExtoMem& extoMem)
           extoMem.isBranch = ((ac_int<32, false>)dctoEx.lhs >= (ac_int<32, false>)dctoEx.rhs);
           break;
       }
+      extoMem.nextPC = extoMem.isBranch ? dctoEx.nextPCDC : (ac_int<32, false>)(extoMem.pc + 4);
       break;
     case RISCV_LD:
       extoMem.isLongInstruction = 1;
@@ -395,17 +392,18 @@ void execute(const struct DCtoEx dctoEx, struct ExtoMem& extoMem)
 
   // If the instruction was dropped, we ensure that isBranch is at zero
   if (!dctoEx.we) {
-    extoMem.isBranch = 0;
-    extoMem.useRd    = 0;
+    extoMem.isBranch   = 0;
+    extoMem.predBranch = 0;
+    extoMem.useRd      = 0;
   }
 }
 
 void memory(const struct ExtoMem extoMem, struct MemtoWB& memtoWB)
 {
-  memtoWB.we                = extoMem.we;
-  memtoWB.useRd             = extoMem.useRd;
-  memtoWB.result            = extoMem.result;
-  memtoWB.rd                = extoMem.rd;
+  memtoWB.we     = extoMem.we;
+  memtoWB.useRd  = extoMem.useRd;
+  memtoWB.result = extoMem.result;
+  memtoWB.rd     = extoMem.rd;
 
   ac_int<32, false> mem_read;
 
@@ -441,8 +439,8 @@ void writeback(const struct MemtoWB memtoWB, struct WBOut& wbOut)
 }
 
 void branchUnit(const ac_int<32, false> nextPC_fetch, const ac_int<32, false> nextPC_decode, const bool isBranch_decode,
-                const ac_int<32, false> nextPC_execute, const bool isBranch_execute, ac_int<32, false>& pc, bool& we_fetch,
-                bool& we_decode, const bool stall_fetch)
+                const ac_int<32, false> nextPC_execute, const bool isBranch_execute, ac_int<32, false>& pc,
+                bool& we_fetch, bool& we_decode, const bool stall_fetch)
 {
 
   if (!stall_fetch) {
@@ -459,14 +457,11 @@ void branchUnit(const ac_int<32, false> nextPC_fetch, const ac_int<32, false> ne
   }
 }
 
-void forwardUnit(const ac_int<5, false> decodeRs1, const bool decodeUseRs1, 
-                 const ac_int<5, false> decodeRs2, const bool decodeUseRs2,
-                 const ac_int<5, false> decodeRs3, const bool decodeUseRs3,
-                 const ac_int<5, false> executeRd, const bool executeUseRd, 
-                 const bool executeIsLongComputation,
-                 const ac_int<5, false> memoryRd, const bool memoryUseRd,
-                 const ac_int<5, false> writebackRd, const bool writebackUseRd,
-                 bool stall[5], struct ForwardReg& forwardRegisters)
+void forwardUnit(const ac_int<5, false> decodeRs1, const bool decodeUseRs1, const ac_int<5, false> decodeRs2,
+                 const bool decodeUseRs2, const ac_int<5, false> decodeRs3, const bool decodeUseRs3,
+                 const ac_int<5, false> executeRd, const bool executeUseRd, const bool executeIsLongComputation,
+                 const ac_int<5, false> memoryRd, const bool memoryUseRd, const ac_int<5, false> writebackRd,
+                 const bool writebackUseRd, bool stall[5], struct ForwardReg& forwardRegisters)
 {
 
   if (decodeUseRs1) {
@@ -534,14 +529,16 @@ void doCycle(struct Core& core, // Core containing all values
   ftoDC_temp.nextPCFetch = 0;
   ftoDC_temp.we          = 0;
   struct DCtoEx dctoEx_temp;
-  dctoEx_temp.isBranch = 0;
-  dctoEx_temp.useRs1   = 0;
-  dctoEx_temp.useRs2   = 0;
-  dctoEx_temp.useRs3   = 0;
-  dctoEx_temp.useRd    = 0;
-  dctoEx_temp.we       = 0;
+  dctoEx_temp.isBranch   = 0;
+  dctoEx_temp.predBranch = 0;
+  dctoEx_temp.useRs1     = 0;
+  dctoEx_temp.useRs2     = 0;
+  dctoEx_temp.useRs3     = 0;
+  dctoEx_temp.useRd      = 0;
+  dctoEx_temp.we         = 0;
   struct ExtoMem extoMem_temp;
   extoMem_temp.useRd    = 0;
+  extoMem_temp.isBranch = 0;
   extoMem_temp.isBranch = 0;
   extoMem_temp.we       = 0;
   struct MemtoWB memtoWB_temp;
@@ -606,8 +603,12 @@ void doCycle(struct Core& core, // Core containing all values
       break;
   }
 
-  memOpType opType = (!core.stallSignals[STALL_MEMORY] && !localStall && memtoWB_temp.we && !core.stallIm && memtoWB_temp.isLoad) ? LOAD
-    : (!core.stallSignals[STALL_MEMORY] && !localStall && memtoWB_temp.we && !core.stallIm && memtoWB_temp.isStore ? STORE : NONE);
+  memOpType opType =
+      (!core.stallSignals[STALL_MEMORY] && !localStall && memtoWB_temp.we && !core.stallIm && memtoWB_temp.isLoad)
+          ? LOAD
+          : (!core.stallSignals[STALL_MEMORY] && !localStall && memtoWB_temp.we && !core.stallIm && memtoWB_temp.isStore
+                 ? STORE
+                 : NONE);
 
   core.dm->process(memtoWB_temp.address, mask, opType, memtoWB_temp.valueToWrite, memtoWB_temp.result, core.stallDm);
 
@@ -617,6 +618,10 @@ void doCycle(struct Core& core, // Core containing all values
   }
 
   if (!core.stallSignals[STALL_DECODE] && !localStall && !core.stallIm && !core.stallDm) {
+    // branch predictor
+    if (dctoEx_temp.opCode == RISCV_BR && dctoEx_temp.we) {
+      core.bp.process(dctoEx_temp.pc, dctoEx_temp.predBranch);
+    }
     core.dctoEx = dctoEx_temp;
 
     if (forwardRegisters.forwardExtoVal1 && extoMem_temp.we)
@@ -651,6 +656,9 @@ void doCycle(struct Core& core, // Core containing all values
   }
 
   if (!core.stallSignals[STALL_EXECUTE] && !localStall && !core.stallIm && !core.stallDm) {
+    if (extoMem_temp.opCode == RISCV_BR && extoMem_temp.we) {
+      core.bp.update(extoMem_temp.pc, extoMem_temp.isBranch);
+    }
     core.extoMem = extoMem_temp;
   }
 
@@ -662,9 +670,9 @@ void doCycle(struct Core& core, // Core containing all values
     core.regFile[wbOut_temp.rd] = wbOut_temp.value;
   }
 
-  branchUnit(ftoDC_temp.nextPCFetch, dctoEx_temp.nextPCDC, dctoEx_temp.isBranch, extoMem_temp.nextPC,
-             extoMem_temp.isBranch, core.pc, core.ftoDC.we, core.dctoEx.we,
-             core.stallSignals[STALL_FETCH] || core.stallIm || core.stallDm || localStall);
+  branchUnit(ftoDC_temp.nextPCFetch, dctoEx_temp.nextPCDC, dctoEx_temp.isBranch || dctoEx_temp.predBranch,
+             extoMem_temp.nextPC, extoMem_temp.isBranch != extoMem_temp.predBranch, core.pc, core.ftoDC.we,
+             core.dctoEx.we, core.stallSignals[STALL_FETCH] || core.stallIm || core.stallDm || localStall);
 
   core.cycle++;
 }
