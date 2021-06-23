@@ -440,11 +440,12 @@ void writeback(const struct MemtoWB memtoWB, struct WBOut& wbOut)
 
 void branchUnit(const ac_int<32, false> nextPC_fetch, const ac_int<32, false> nextPC_decode, const bool isBranch_decode,
                 const ac_int<32, false> nextPC_execute, const bool isBranch_execute, ac_int<32, false>& pc,
-                bool& we_fetch, bool& we_decode, const bool stall_fetch)
+                bool& we_fetch, bool& we_decode, const bool stall_fetch, BranchPredictor& bp)
 {
 
   if (!stall_fetch) {
     if (isBranch_execute) {
+      bp.undo();
       we_fetch  = 0;
       we_decode = 0;
       pc        = nextPC_execute;
@@ -507,6 +508,7 @@ void forwardUnit(const ac_int<5, false> decodeRs1, const bool decodeUseRs1, cons
       forwardRegisters.forwardWBtoVal3 = 1;
   }
 }
+#include <iostream>
 
 void doCycle(struct Core& core, // Core containing all values
              bool globalStall)
@@ -672,7 +674,7 @@ void doCycle(struct Core& core, // Core containing all values
 
   branchUnit(ftoDC_temp.nextPCFetch, dctoEx_temp.nextPCDC, dctoEx_temp.isBranch || dctoEx_temp.predBranch,
              extoMem_temp.nextPC, extoMem_temp.isBranch != extoMem_temp.predBranch, core.pc, core.ftoDC.we,
-             core.dctoEx.we, core.stallSignals[STALL_FETCH] || core.stallIm || core.stallDm || localStall);
+             core.dctoEx.we, core.stallSignals[STALL_FETCH] || core.stallIm || core.stallDm || localStall, core.bp);
 
   core.cycle++;
 }
