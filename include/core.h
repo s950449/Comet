@@ -18,7 +18,11 @@
 #include "riscvISA.h"
 
 // all the possible memories
+#ifdef RANDOM_BRANCH_PREDICTOR
+#include "randombranchPredictor.h"
+#else
 #include "branchPredictor.h"
+#endif
 #include "cacheMemory.h"
 #include "memoryInterface.h"
 #include "pipelineRegisters.h"
